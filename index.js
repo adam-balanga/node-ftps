@@ -1,9 +1,15 @@
 var spawn = require('child_process').spawn,
 	_ = require('underscore');
+var events = require('events');
+var util = require('util');
+
+var isWin = /^win/.test(process.platform);
 
 var escapeshell = function(cmd) {
   return cmd.replace(/(["\s'$`\\])/g,'\\$1');
 };
+
+
 
 /*
 ** Params :
@@ -21,18 +27,22 @@ var escapeshell = function(cmd) {
 ** ftp.cd('to_maleamassage').rm('./test.txt').exec(console.log);
 */
 
+
 var FTP = function (options) {
-	this.initialize(options);
+    this.initialize(options);
 	this.cmds = [];
 };
+util.inherits(FTP, events.EventEmitter)
 
 FTP.prototype.initialize = function (options) {
 	var defaults = {
 		host: '',
 		username: '',
-		password: ''
+		password: '',
+        path: 'lftp'
 	};
-	var opts = _.pick(_.extend(defaults, options), 'host', 'username', 'password', 'port');
+
+	var opts = _.pick(_.extend(defaults, options), 'host', 'username', 'password', 'port', 'path');
 	if (!opts.host) throw new Error('You need to set a host.');
 	if (!opts.username) throw new Error('You need to set an username.');
 	if (!opts.password) throw new Error('You need to set a password.');
@@ -57,10 +67,12 @@ FTP.prototype.exec = function (cmds, callback) {
 	cmd += this.cmds.join(';');
 	this.cmds = [];
 
-	var lftp = spawn('lftp', ['-c', cmd]);
+	var lftp = spawn(this.options.path, ['-c', cmd]);
 	var data = "";
 	var error = "";
 	lftp.stdout.on('data', function (res) {
+        console.log('emitting event: ' + String(res));
+        this.emit('startedFile', res);
 		data += res;
 	});
 	lftp.stderr.on('data', function (res) {
@@ -92,8 +104,8 @@ FTP.prototype.put = function (localPath, remotePath) {
 	if (!localPath)
 		return this;
 	if (!remotePath)
-		return this.raw('put '+escapeshell(localPath));
-	return this.raw('put '+escapeshell(localPath)+' -o '+escapeshell(remotePath));
+		return this.raw('put '+escapeshell(this.convertPath(localPath)));
+	return this.raw('put '+escapeshell(this.convertPath(localPath))+' -o '+escapeshell(remotePath));
 };
 FTP.prototype.addFile = FTP.prototype.put;
 FTP.prototype.get = function (remotePath, localPath) {
@@ -101,7 +113,7 @@ FTP.prototype.get = function (remotePath, localPath) {
 		return this;
 	if (!localPath)
 		return this.raw('get '+escapeshell(remotePath));
-	return this.raw('get '+escapeshell(remotePath)+' -o '+escapeshell(localPath));
+	return this.raw('get '+escapeshell(remotePath)+' -o '+escapeshell(this.convertPath(localPath)));
 };
 FTP.prototype.getFile = FTP.prototype.get;
 FTP.prototype.mv = function (from, to) {
@@ -112,5 +124,28 @@ FTP.prototype.mv = function (from, to) {
 FTP.prototype.move = FTP.prototype.mv;
 FTP.prototype.rm = function () { return this.raw('rm ' + Array.prototype.slice.call(arguments).map(escapeshell).join(' ')); };
 FTP.prototype.remove = FTP.prototype.rm;
+
+/**
+ * Mirrors a local directory to a remote server.
+ * @param localPath the path to mirror locally
+ * @param remotePath the location to mirror remotely
+ * @returns {*} the ftp object for chaining
+ */
+FTP.prototype.mirror = function (localPath, remotePath) {
+	if (!localPath || !remotePath) { return this; }
+	return this.raw("mirror -R -c -vvv '"+this.convertPath(localPath)+"' '"+remotePath+"'");
+}
+
+/**
+ * Converts windows paths to cygwin compatible paths.
+ * @param path the path to convert
+ * @returns {*} the original path on non-windows systems and a cygwin path on windows machines.
+ */
+FTP.prototype.convertPath = function (path) {
+    if (!isWin) { return path; }
+    var cygPath = path.replace(/^(\w+):\\/, '/cygdrive/$1/').replace(/\\/g, '/');
+    console.log(cygPath);
+    return cygPath;
+}
 
 module.exports = FTP;
